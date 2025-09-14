@@ -31,6 +31,37 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 
 ## Deploy on Vercel
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+The easiest way to deploy is via the [Vercel Platform](https://vercel.com/new). This project expects the following environment variables:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Required
+
+- TMDB (choose one)
+  - `TMDB_API_KEY` – TMDB v3 API key
+  - or `TMDB_ACCESS_TOKEN` – TMDB v4 bearer token
+- Firebase
+  - `NEXT_PUBLIC_FIREBASE_API_KEY`
+  - `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`
+  - `NEXT_PUBLIC_FIREBASE_PROJECT_ID`
+  - `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET`
+  - `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID`
+  - `NEXT_PUBLIC_FIREBASE_APP_ID`
+
+### Optional (caching for resilience)
+
+- Redis (recommended for production)
+  - `REDIS_URL` – e.g. Upstash `redis://:password@host:port`
+  - or `UPSTASH_REDIS_URL`
+
+If Redis is not provided, the app falls back to disk and memory caches (`.cache/tmdb/`) to keep pages working when TMDB is flaky.
+
+### Steps
+
+1. Push this repo to GitHub/GitLab and import it into Vercel.
+2. In Vercel project settings → Environment Variables, add the variables listed above for both Preview and Production.
+3. Hit Deploy. Vercel auto-detects Next.js 15.
+
+### Notes
+
+- The TMDB proxy at `src/app/api/tmdb/[...path]/route.ts` serves cached responses when upstream fails (Redis → disk → memory) with a 24h TTL.
+- `next.config.ts` includes `images.qualities` so using `<Image quality={90} />` is supported and avoids Next 16 warnings.
+- Turbopack workspace root is set to the monorepo root to avoid local warnings.

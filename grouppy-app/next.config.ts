@@ -27,6 +27,10 @@ const nextConfig: NextConfig = {
       },
     ],
   },
+  turbopack: {
+    // Monorepo root sits one level up from this next.config.ts
+    root: "..",
+  },
 };
 
 export default nextConfig;

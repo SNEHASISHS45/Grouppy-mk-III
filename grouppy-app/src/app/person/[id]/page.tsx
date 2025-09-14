@@ -3,7 +3,10 @@ import { TmdbResponse } from "@/lib/tmdb";
 import Image from "next/image";
 import { headers } from "next/headers";
 import Link from "next/link";
-import dynamic from "next/dynamic";
+import ActorPrefsClient from "@/components/person/ActorPrefsClient";
+import PersonPhotosClient from "@/components/person/PersonPhotosClient";
+import PersonVideosClient from "@/components/person/PersonVideosClient";
+import SocialEmbedsClient from "@/components/person/SocialEmbedsClient";
 
 export const revalidate = 86400;
 
@@ -70,10 +73,7 @@ function ActorMoviesGrid({ credits, type }: { credits: any; type: "upcoming" | "
   );
 }
 
-const PersonPhotosClient = dynamic(() => import("@/components/person/PersonPhotosClient"), { ssr: false });
-const PersonVideosClient = dynamic(() => import("@/components/person/PersonVideosClient"), { ssr: false });
-const ActorPrefsClient = dynamic(() => import("@/components/person/ActorPrefsClient"), { ssr: false });
-const SocialEmbedsClient = dynamic(() => import("@/components/person/SocialEmbedsClient"), { ssr: false });
+// Client components imported directly. Next.js will render them as client boundaries.
 
 export default async function PersonPage({ params, searchParams }: { params: Promise<{ id: string }>, searchParams?: Promise<{ t?: string, s?: string, sort?: string, dept?: string }> }) {
   const { id } = await params;
