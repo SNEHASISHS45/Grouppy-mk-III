@@ -1,10 +1,8 @@
 {
-  "framework": "nextjs",
-  "rootDirectory": "grouppy-app",
-  "installCommand": "npm ci",
-  "buildCommand": "npm run build",
-  "outputDirectory": ".next",
-  "images": {
-    "sizes": [16, 32, 48, 64, 96, 128, 256, 384, 512]
-  }
+  "version": 2,
+  "builds": [
+    { "src": "grouppy-app/next.config.ts", "use": "@vercel/next" }
+  ],
+  "installCommand": "cd grouppy-app && npm ci",
+  "buildCommand": "cd grouppy-app && npm run build"
 }
