@@ -13,10 +13,11 @@ async function tmdb(path: string, search: Record<string, string | number> = {}) 
   return NextResponse.json(await res.json());
 }
 
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const p = await params;
   const page = Math.max(1, parseInt(req.nextUrl.searchParams.get("page") || "1", 10));
   const pageSize = Math.min(50, Math.max(1, parseInt(req.nextUrl.searchParams.get("pageSize") || "20", 10)));
-  const resp = await tmdb(`person/${params.id}/images`);
+  const resp = await tmdb(`person/${p.id}/images`);
   if ((resp as any).status && (resp as any).status !== 200) return resp as NextResponse;
   const json = await (resp as NextResponse).json();
   const profiles: any[] = Array.isArray(json?.profiles) ? json.profiles : [];
