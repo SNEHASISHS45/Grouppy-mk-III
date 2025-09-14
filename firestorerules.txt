@@ -1,0 +1,238 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helpers
+    function isSignedIn() { return request.auth != null; }
+    function isAdmin() { return request.auth != null && request.auth.token.admin == true; }
+    // Allowlist-driven admin: if a document exists at admins/{uid}
+    function isRulesAdmin() { return request.auth != null && exists(/databases/$(database)/documents/admins/$(request.auth.uid)); }
+    // Username-based admin: admins/{username} where username comes from users/{uid}
+    function isRulesAdminByUsername() {
+      return isSignedIn() && getUsername(request.auth.uid) is string &&
+             getUsername(request.auth.uid).size() > 0 &&
+             exists(/databases/$(database)/documents/admins/$(getUsername(request.auth.uid)));
+    }
+    // Super admin: either via custom token claim (preferred) or by username in users/{uid}
+    function isSuperAdmin() {
+      return isSignedIn() && (request.auth.token.superadmin == true || ['Snehasish', 'snehasish'].hasAny([getUsername(request.auth.uid)]));
+    }
+    function isOwner(uid) { return isSignedIn() && request.auth.uid == uid; }
+    function docOwner(field) { return isSignedIn() && request.auth.uid == resource.data[field]; }
+    function createOwner(field) { return isSignedIn() && request.auth.uid == request.resource.data[field]; }
+    function changedOnly(keys) { return request.resource.data.diff(resource.data).changedKeys().hasOnly(keys); }
+    function userDoc(uid) { return get(/databases/$(database)/documents/users/$(uid)).data; }
+    function getUsername(uid) { return userDoc(uid).username; }
+    function isMutualFollow(a, b) {
+      return userDoc(b).followers.hasAny([a]) && userDoc(a).followers.hasAny([b]) &&
+             userDoc(a).following.hasAny([b]) && userDoc(b).following.hasAny([a]);
+    }
+
+    // Users: anyone can read; owner OR admin can write
+    match /users/{userId} {
+      allow read: if true;
+      // Owner or admin can fully write their own user doc
+      // Admin can be either a custom-claim admin OR present in the admins allowlist (by uid or username)
+      allow write: if isOwner(userId) || isAdmin() || isRulesAdmin() || isRulesAdminByUsername();
+      // Additionally, allow authenticated users to update engagement-only fields
+      // 'followers', 'following', and follow-request arrays used for approvals
+      allow update: if isSignedIn() && changedOnly([
+        'followers',
+        'following',
+        'incomingFollowRequests',
+        'outgoingFollowRequests',
+      ]);
+
+      // Notifications subcollection
+      match /notifications/{notifId} {
+        allow read: if isOwner(userId);
+        // Allow any signed-in user to create a notification for userId (e.g., follow). Limit fields.
+        allow create: if isSignedIn() &&
+          request.resource.data.keys().hasOnly(['type','title','body','link','meta','read','createdAt']) &&
+          request.resource.data.read == false;
+        // Only the owner can update/delete their notifications
+        allow update, delete: if isOwner(userId);
+      }
+    }
+
+    // Clubs: anyone can read, only the admin (creator) can update or delete
+    match /clubs/{clubId} {
+      allow read: if true;
+      // Creator must be the admin on creation
+      allow create: if createOwner('admin');
+      // Allow admin full updates. Additionally, allow authenticated users to update the members array only
+      allow update: if (
+        docOwner('admin') ||
+        (isSignedIn() && changedOnly(['members']))
+      );
+      allow delete: if docOwner('admin');
+    }
+
+    // Posts (exploreImages): anyone can read, only the creator can update/delete
+    match /exploreImages/{postId} {
+      allow read: if true;
+      // Post owner must match user.uid on create
+      allow create: if isSignedIn() && request.resource.data.user.uid == request.auth.uid;
+      // Allow post owner to update/delete.
+      // Additionally, allow authenticated users to update engagement-only fields used by the app UI.
+      // These fields do not alter ownership or core content: likers, likeCount, commentCount, repostCount, shareCount, poll, comments
+      allow update: if isSignedIn() && (
+        request.auth.uid == resource.data.user.uid ||
+        changedOnly(['likers', 'likeCount', 'commentCount', 'repostCount', 'shareCount', 'likes', 'poll', 'comments'])
+      );
+      allow delete: if isSignedIn() && request.auth.uid == resource.data.user.uid;
+
+      // Comments subcollection
+      match /comments/{commentId} {
+        allow read: if true;
+        // Create only by signed-in user; author must match request.auth.uid
+        allow create: if isSignedIn() && request.resource.data.user.uid == request.auth.uid;
+        // Allow only the comment author to delete their own comment
+        allow delete: if isSignedIn() && request.auth.uid == resource.data.user.uid;
+        // Allow signed-in users to update only the 'reportedBy' array (for reporting)
+        allow update: if isSignedIn() && changedOnly(['reportedBy']);
+      }
+    }
+
+    // Reviews: authenticated users can create and manage their own reviews
+    match /reviews/{reviewId} {
+      allow read: if true;
+      allow create: if createOwner('userId');
+      allow update, delete: if docOwner('userId');
+    }
+
+    // Review actions tracking
+    match /reviewActions/{actionId} {
+      allow read: if true;
+      allow create: if createOwner('userId');
+    }
+
+    // Movie reviews
+    match /movies/{movieId}/reviews/{reviewId} {
+      allow read: if true;
+      allow create: if createOwner('userId');
+      allow update, delete: if docOwner('userId');
+    }
+
+    // Chats: parent doc must include participants [uid1, uid2]; allow only mutual followers
+    match /chats/{chatId} {
+      allow read: if isSignedIn() && request.auth.uid in resource.data.participants;
+      allow create: if isSignedIn()
+        && request.auth.uid in request.resource.data.participants
+        && request.resource.data.participants.size() == 2
+        && isMutualFollow(request.resource.data.participants[0], request.resource.data.participants[1]);
+      allow update: if isSignedIn() && request.auth.uid in resource.data.participants;
+      allow delete: if false; // prevent accidental deletes
+
+      match /messages/{messageId} {
+        allow read: if isSignedIn() && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+        allow create: if isSignedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants
+          && request.resource.data.senderId == request.auth.uid
+          && isMutualFollow(
+               get(/databases/$(database)/documents/chats/$(chatId)).data.participants[0],
+               get(/databases/$(database)/documents/chats/$(chatId)).data.participants[1]
+             );
+        // Allow limited updates for system call-history messages only: status/resolvedAt
+        allow update: if isSignedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants
+          && resource.data.type == 'call'
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly(['status','resolvedAt']);
+        allow delete: if false;
+      }
+    }
+
+    // Call invites collection for ringing/accept/decline/miss/cancel
+    match /callInvites/{inviteId} {
+      allow read: if isSignedIn() && (
+        request.auth.uid == resource.data.callerId || request.auth.uid == resource.data.calleeId
+      );
+      // Caller creates the invite
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.callerId;
+      // Updates allowed:
+      // - callee may accept/decline a ringing invite
+      // - caller may cancel/miss their own invite
+      // - caller may attach messageId after creating (1-way add)
+      allow update: if isSignedIn() && (
+        (
+          request.auth.uid == resource.data.calleeId &&
+          request.resource.data.status in ['accepted','declined'] &&
+          request.resource.data.diff(resource.data).changedKeys().hasOnly(['status','acceptedAt','declinedAt'])
+        ) || (
+          request.auth.uid == resource.data.callerId &&
+          (
+            (request.resource.data.status in ['canceled','missed'] &&
+             request.resource.data.diff(resource.data).changedKeys().hasOnly(['status','canceledAt','missedAt'])) ||
+            (
+              // allow adding messageId exactly once by caller
+              resource.data.messageId == null && request.resource.data.messageId is string &&
+              request.resource.data.diff(resource.data).changedKeys().hasOnly(['messageId'])
+            )
+          )
+        )
+      );
+      allow delete: if false;
+    }
+
+    // Calls signaling: require participants and mutual follow
+    match /calls/{callId} {
+      allow read: if isSignedIn() && request.auth.uid in resource.data.participants;
+      allow create: if isSignedIn()
+        && request.auth.uid in request.resource.data.participants
+        && request.resource.data.participants.size() == 2
+        && isMutualFollow(request.resource.data.participants[0], request.resource.data.participants[1]);
+      allow update: if isSignedIn() && request.auth.uid in resource.data.participants;
+      allow delete: if false;
+      match /candidates/{candId} {
+        allow read: if isSignedIn() && request.auth.uid in get(/databases/$(database)/documents/calls/$(callId)).data.participants;
+        allow create: if isSignedIn() && request.auth.uid in get(/databases/$(database)/documents/calls/$(callId)).data.participants;
+        allow update, delete: if false;
+      }
+    }
+
+    match /groupCalls/{roomId} {
+      allow read, write: if isSignedIn();
+    }
+
+    // Collections owned by a user
+    match /collections/{collectionId} {
+      allow read: if true;
+      allow create: if createOwner('userId');
+      allow update, delete: if docOwner('userId');
+    }
+
+    // Admin allowlist (username-based). Only existing admins can read/write.
+    match /admins/{username} {
+      allow read, write: if isRulesAdmin() || isRulesAdminByUsername();
+    }
+
+    // Stories: public read; only the owner can write/delete their own items
+    match /stories/{userId} {
+      // Parent doc readable by anyone
+      allow read: if true;
+      // Only owner/admins can write to parent doc (rare); subcollection handles items
+      allow write: if isOwner(userId) || isAdmin() || isRulesAdmin() || isRulesAdminByUsername();
+
+      // Story items subcollection (stories/{uid}/items/{itemId})
+      match /items/{itemId} {
+        allow read: if true;
+        // Only the signed-in owner can create items for their path. Restrict fields.
+        allow create: if isSignedIn()
+          && request.auth.uid == userId
+          && request.resource.data.keys().hasOnly(['url','type','createdAt'])
+          && request.resource.data.type in ['image','video']
+          && request.resource.data.url is string;
+        // No updates after creation (immutable); owner can delete
+        allow update: if false;
+        allow delete: if isSignedIn() && request.auth.uid == userId;
+      }
+    }
+
+    // Default: read-all, write-none unless allowed above.
+    // Super admin gets full write access globally.
+    match /{document=**} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+  }
+}
